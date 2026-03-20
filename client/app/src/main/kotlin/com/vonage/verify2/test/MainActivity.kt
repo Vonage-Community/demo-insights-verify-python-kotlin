@@ -1,4 +1,4 @@
-package com.vonage.verify2.test
+package com.vonage.verify.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -11,31 +11,59 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.*
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import com.google.gson.Gson
 import com.google.gson.JsonObject
-import java.io.IOException
 import com.vonage.clientlibrary.VGCellularRequestClient
 import com.vonage.clientlibrary.VGCellularRequestParameters
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
 
-
-
-var currentRequestId: String = ""
-
-const val backendUrl = BuildConfig.BACKEND_URL
-const val phoneNumber = BuildConfig.PHONE_NUMBER
+private const val BACKEND_URL = BuildConfig.BACKEND_URL
+private const val DEFAULT_PHONE = BuildConfig.PHONE_NUMBER
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Needed for Silent Auth cellular requests
         VGCellularRequestClient.initializeSdk(this.applicationContext)
+
         setContent { VerifyApp() }
     }
 }
 
+/**
+ * UI State Machine
+ */
+private sealed class VerifyUiState {
+    data object EnterPhone: VerifyUiState()
+    data object Loading: VerifyUiState()
+    data class EnterSms(val requestId: String) : VerifyUiState()
+    data class Verified(val method: String) : VerifyUiState()
+    data class Error(val message: String) : VerifyUiState()
+}
+
+/**
+ * Backend check-code response model
+ */
+private data class CheckCodeResponse(
+    val verified: Boolean,
+    val status: String?
+)
+
+/**
+ * Backend /verification response model
+ */
+private data class StartVerificationResponse(
+    val requestId: String,
+    val checkUrl: String?
+)
 @Composable
 fun VerifyApp() {
     MaterialTheme {
@@ -47,187 +75,297 @@ fun VerifyApp() {
 
 @Composable
 fun VerificationScreen() {
-    var phone by remember { mutableStateOf(phoneNumber) }
-    var code by remember { mutableStateOf("") }
-    var message by remember { mutableStateOf("") }
-    var checkUrl by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
-    var fallbackToSms by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
+    var phone by remember { mutableStateOf(DEFAULT_PHONE) }
+    var smsCode by remember { mutableStateOf("") }
+
+    var uiState by remember { mutableStateOf<VerifyUiState>(VerifyUiState.EnterPhone) }
+    var statusMessage by remember { mutableStateOf("") }
+
+    val scope = rememberCoroutineScope()
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Text(
+            text = "Verify your phone",
+            style = MaterialTheme.typography.headlineSmall
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         OutlinedTextField(
             value = phone,
             onValueChange = { phone = it },
-            label = { Text("Phone Number") },
-            keyboardOptions = KeyboardOptions.Default.copy(keyboardType = KeyboardType.Phone),
+            enabled = uiState !is VerifyUiState.Loading,
+            label = { Text("Phone number (with country prefix)") },
+            placeholder = { Text("+34600000000") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
             modifier = Modifier.fillMaxWidth()
         )
 
-        if (fallbackToSms) {
-            Spacer(modifier = Modifier.height(16.dp))
+        // Show SMS input only if we are in EnterSms state
+        val requestIdForSms = (uiState as? VerifyUiState.EnterSms)?.requestId
+        if (requestIdForSms != null) {
+            Spacer(modifier = Modifier.height(12.dp))
             OutlinedTextField(
-                value = code,
-                onValueChange = { code = it },
-                label = { Text("SMS Code") },
-                keyboardOptions = KeyboardOptions.Default.copy(keyboardType = KeyboardType.Number),
+                value = smsCode,
+                onValueChange = { smsCode = it },
+                enabled = uiState !is VerifyUiState.Loading,
+                label = { Text("SMS code") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth()
             )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (isLoading) {
-            CircularProgressIndicator()
-        } else {
-            if (!fallbackToSms) {
-                Button(onClick = {
-                    coroutineScope.launch {
-                        isLoading = true
-                        message = ""
-                        fallbackToSms = false
+        when (uiState) {
+            is VerifyUiState.Loading -> {
+                CircularProgressIndicator()
+            }
 
-                        try {
-                            println("Calling startVerification")
-                            val (requestId, authUrl) = startVerification(phone)
-                            currentRequestId = requestId
-                            checkUrl = authUrl
-                        } catch (e: Exception) {
-                            message = "Unable to verify. Please try again. ${e.message}"
-                            isLoading = false
-                            return@launch
-                        }
-                        try {
-                            val codeFromSa = checkSilentAuth(checkUrl)
-                            val verified = submitCode(currentRequestId, codeFromSa)
-                            if (verified) {
-                                message = "✅ Verified via Silent Auth"
-                                isLoading = false
-                            } else {
-                                message = "Silent Auth didn't work. Switching to SMS."
-                                runCatching { nextWorkflow(currentRequestId) }
-                                fallbackToSms = true
-                                isLoading = false
+            is VerifyUiState.EnterPhone,
+            is VerifyUiState.Error -> {
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = phone.isNotBlank(),
+                    onClick = {
+                        scope.launch {
+                            uiState = VerifyUiState.Loading
+                            statusMessage = ""
+
+                            try {
+                                // 1) Start verification on backend
+                                val start = startVerification(phone)
+                                val requestId = start.requestId
+                                val checkUrl = start.checkUrl
+
+                                // 2) If backend provided a check_url, attempt Silent Auth (on-device)
+                                if (!checkUrl.isNullOrBlank()) {
+                                    statusMessage = "Attempting Silent Authentication..."
+
+                                    try {
+                                        // Perform Silent Auth check_url call via Vonage Client SDK
+                                        val codeFromSa = checkSilentAuth(checkUrl)
+
+                                        // Submit code to backend for final validation
+                                        val result = submitCode(requestId, codeFromSa)
+
+                                        if (result.verified) {
+                                            uiState = VerifyUiState.Verified("Silent Authentication")
+                                            statusMessage = "Verified via Silent Authentication"
+                                        } else {
+                                            // Silent Auth didn't complete, fall back to SMS
+                                            uiState = VerifyUiState.EnterSms(requestId)
+                                            statusMessage =
+                                                "Silent Authentication didn't complete. Please enter the SMS code."
+                                        }
+                                    } catch (e: Exception) {
+                                        // Silent Auth attempt failed; fall back to SMS (and optionally force fallback)
+                                        statusMessage = "Silent Authentication failed. Switching to SMS..."
+
+                                        // Best-effort: force fallback now to avoid waiting for SA timeout
+                                        runCatching { requestNextWorkflow(requestId) }
+
+                                        uiState = VerifyUiState.EnterSms(requestId)
+                                        statusMessage = "Please enter the SMS code."
+                                    }
+                                } else {
+                                    // No check_url → Silent Auth not available; go directly to SMS
+                                    runCatching { requestNextWorkflow(requestId) } // best-effort
+                                    uiState = VerifyUiState.EnterSms(requestId)
+                                    statusMessage = "Silent Authentication is not available. Please enter the SMS code."
+                                }
+                            } catch (e: Exception) {
+                                uiState = VerifyUiState.Error(e.message ?: "Unknown error")
+                                statusMessage = "Unable to start verification: ${e.message}"
                             }
-                        } catch (e: Exception) {
-                            message = "Silent Auth failed, please enter SMS code"
-                            runCatching { nextWorkflow(currentRequestId) }
-                            fallbackToSms = true
-                            isLoading = false
                         }
                     }
-                }) {
-                    Text("Login")
+                ) {
+                    Text("Start verification")
                 }
             }
 
-            if (fallbackToSms) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(onClick = {
-                    coroutineScope.launch {
-                        isLoading = true
-                        try {
-                            val verified = submitCode(currentRequestId, code)
-                            message = if (verified) "✅ Verified via SMS" else "❌ Invalid SMS code"
-                        } catch (e: Exception) {
-                            message = "Error: ${e.message}"
-                        } finally {
-                            isLoading = false
+            is VerifyUiState.EnterSms -> {
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = smsCode.isNotBlank(),
+                    onClick = {
+                        scope.launch {
+                            uiState = VerifyUiState.Loading
+                            statusMessage = ""
+
+                            try {
+                                val requestId = requestIdForSms ?: throw IOException("Missing request_id")
+
+                                // Submit code to backend - backend responds synchronously
+                                val result = submitCode(requestId, smsCode)
+
+                                if (result.verified) {
+                                    uiState = VerifyUiState.Verified("SMS")
+                                    statusMessage = "Verified via SMS"
+                                } else {
+                                    uiState = VerifyUiState.EnterSms(requestId)
+                                    statusMessage = "Invalid code. Please try again."
+                                }
+                            } catch (e: Exception) {
+                                uiState = VerifyUiState.Error(e.message ?: "Unknown error")
+                                statusMessage = "Error checking code: ${e.message}"
+                            }
                         }
                     }
-                }) {
-                    Text("Submit Code")
+                ) {
+                    Text("Submit code")
+                }
+            }
+
+            is VerifyUiState.Verified -> {
+                val method = (uiState as VerifyUiState.Verified).method
+                Text("Success! Verified using $method.")
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        // Reset screen to try again
+                        smsCode = ""
+                        statusMessage = ""
+                        uiState = VerifyUiState.EnterPhone
+                    }
+                ) {
+                    Text("Verify another number")
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        if (message.isNotEmpty()) {
-            Text(message)
+        if (statusMessage.isNotBlank()) {
+            Text(statusMessage)
         }
     }
 }
 
-suspend fun nextWorkflow(requestId: String) = withContext(Dispatchers.IO) {
+/**
+ * Backend call: POST /verification
+ * Returns (request_id, check_url?)
+ */
+private suspend fun startVerification(phone: String): StartVerificationResponse =
+    withContext(Dispatchers.IO) {
     val client = OkHttpClient()
-    val json = Gson().toJson(mapOf("requestId" to requestId))
-    val requestBody = json.toRequestBody("application/json".toMediaType())
-    val request = Request.Builder()
-        .url("$backendUrl/next")
-        .post(requestBody)
-        .build()
-    val response = client.newCall(request).execute()
-    if (!response.isSuccessful) throw IOException("Verification failed: ${response.code}")
-}
 
-suspend fun startVerification(phone: String): Pair<String, String> = withContext(Dispatchers.IO) {
-    val client = OkHttpClient()
     val json = Gson().toJson(mapOf("phone" to phone))
     val requestBody = json.toRequestBody("application/json".toMediaType())
+
     val request = Request.Builder()
-        .url("$backendUrl/verification")
+        .url("$BACKEND_URL/verification")
         .post(requestBody)
         .build()
+
     val response = client.newCall(request).execute()
-    if (!response.isSuccessful) throw IOException("Verification failed: ${response.code}")
+    if (!response.isSuccessful) {
+        val errorBody = response.body?.string() ?: "Unknown error"
+        throw IOException("Start verification failed: HTTP ${response.code} - $errorBody")
+    }
 
-    val jsonBody = Gson().fromJson(response.body?.string(), JsonObject::class.java)
+    val body = response.body?.string() ?: throw IOException("Empty response body")
+    val jsonBody = Gson().fromJson(body, JsonObject::class.java)
 
-    val checkURL = jsonBody.get("check_url")?.asString ?: throw IOException("Missing check_url")
     val requestId = jsonBody.get("request_id")?.asString ?: throw IOException("Missing request_id")
+    val checkUrl = jsonBody.get("check_url")?.asString // may be null
 
-    Pair(requestId, checkURL)
+    StartVerificationResponse(requestId, checkUrl)
 }
 
-suspend fun checkSilentAuth(url: String): String = withContext(Dispatchers.IO) {
-
+/**
+ * Silent Auth cellular GET to check_url.
+ * Expects a JSON body containing a "code" field.
+ */
+private suspend fun checkSilentAuth(url: String): String = withContext(Dispatchers.IO) {
     val params = VGCellularRequestParameters(
         url = url,
         headers = mapOf(),
         queryParameters = mapOf(),
         maxRedirectCount = 10
     )
-    val response = VGCellularRequestClient.getInstance().startCellularGetRequest(params, false)
 
-    val status = response.optInt("http_status", -1)
-    println("Vonage cellular request status: $status")
+    val response = VGCellularRequestClient.getInstance()
+        .startCellularGetRequest(params, false)
 
+    val httpStatus = response.optInt("http_status", -1)
     val sdkError = response.optString("error", "")
+
     if (sdkError.isNotEmpty()) {
-        println("Silent Auth Vonage error: $sdkError")
-        throw IOException("Silent Auth Vonage error: $sdkError")
+        throw IOException("Silent Auth SDK error: $sdkError")
+    }
+
+    if (httpStatus !in 200..299) {
+        val rawBody = response.optString("response_raw_body", "")
+        throw IOException("Silent Auth failed: HTTP $httpStatus - ${rawBody.take(200)}")
     }
 
     val bodyJsonObj = response.optJSONObject("response_body")
-    val rawBody = response.optString("response_raw_body", "")
+    val code = bodyJsonObj?.optString("code", null)
 
-    if (status !in 200..299) {
-        throw IOException("Silent Auth failed: HTTP $status - body: ${rawBody.take(500)}")
+    if (code.isNullOrBlank()) {
+        throw IOException("Silent Auth response missing 'code'")
     }
-    val code: String? = bodyJsonObj?.optString("code", "")
 
-    if (code.isNullOrEmpty()) {
-        throw IOException("Missing code from Silent Auth response")
-    }
-    return@withContext code
+    code
 }
 
-
-suspend fun submitCode(requestId: String, code: String): Boolean = withContext(Dispatchers.IO) {
+/**
+ * Backend call: POST /check-code
+ * Backend validates the code with Vonage and returns result synchronously
+ */
+private suspend fun submitCode(requestId: String, code: String): CheckCodeResponse = withContext(Dispatchers.IO) {
     val client = OkHttpClient()
+
     val json = Gson().toJson(mapOf("request_id" to requestId, "code" to code))
     val requestBody = json.toRequestBody("application/json".toMediaType())
+
     val request = Request.Builder()
-        .url("$backendUrl/check-code")
+        .url("$BACKEND_URL/check-code")
         .post(requestBody)
         .build()
+
     val response = client.newCall(request).execute()
-    if (!response.isSuccessful) throw IOException("Code verification failed: ${response.code}")
-    val jsonBody = Gson().fromJson(response.body?.string(), JsonObject::class.java)
-    jsonBody.get("verified")?.asBoolean ?: false
+    if (!response.isSuccessful) {
+        val errorBody = response.body?.string() ?: "Unknown error"
+        throw IOException("Check code failed: HTTP ${response.code} - $errorBody")
+    }
+
+    val body = response.body?.string() ?: throw IOException("Empty response body")
+    val jsonBody = Gson().fromJson(body, JsonObject::class.java)
+
+    CheckCodeResponse(
+        verified = jsonBody.get("verified")?.asBoolean ?: false,
+        status = jsonBody.get("status")?.asString
+    )
+}
+
+/**
+ * Backend call: POST /next
+ * Explicitly requests fallback to SMS workflow
+ */
+private suspend fun requestNextWorkflow(requestId: String): Unit = withContext(Dispatchers.IO) {
+    val client = OkHttpClient()
+
+    val json = Gson().toJson(mapOf("requestId" to requestId))
+    val requestBody = json.toRequestBody("application/json".toMediaType())
+
+    val request = Request.Builder()
+        .url("$BACKEND_URL/next")
+        .post(requestBody)
+        .build()
+
+    val response = client.newCall(request).execute()
+    if (!response.isSuccessful) {
+        val errorBody = response.body?.string() ?: "Unknown error"
+        throw IOException("Next workflow failed: HTTP ${response.code} - $errorBody")
+    }
 }
