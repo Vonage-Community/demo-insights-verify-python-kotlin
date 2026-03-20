@@ -1,4 +1,4 @@
-package com.vonage.verify2.test.ui.theme
+package com.vonage.verify2.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

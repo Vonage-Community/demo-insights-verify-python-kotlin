@@ -1,4 +1,4 @@
-package com.vonage.verify.app
+package com.vonage.verify2.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity

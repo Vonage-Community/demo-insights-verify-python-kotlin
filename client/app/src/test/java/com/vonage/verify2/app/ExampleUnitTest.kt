@@ -1,4 +1,4 @@
-package com.vonage.verify2.test
+package com.vonage.verify2.app
 
 import org.junit.Test
 

@@ -15,7 +15,7 @@ val props = Properties().apply {
 
 
 android {
-    namespace = "com.vonage.verify2.test"
+    namespace = "com.vonage.verify2.app"
     compileSdk = 36
 
     defaultConfig {
