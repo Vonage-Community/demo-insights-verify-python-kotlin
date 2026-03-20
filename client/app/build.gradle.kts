@@ -2,26 +2,38 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    alias(libs.plugins.kotlin.compose)
 }
 
-val localProps = project.rootProject.file("local.properties")
-val props = Properties()
-props.load(localProps.inputStream())
+val localPropsFile = rootProject.file("local.properties")
+val props = Properties().apply {
+    if (!localPropsFile.exists()) {
+        error("Missing local.properties in the project root. Add BACKEND_URL and PHONE_NUMBER there.")
+    }
+    load(localPropsFile.inputStream())
+}
+
 
 android {
     namespace = "com.vonage.verify2.test"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.vonage.verify2.test"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
-        buildConfigField("String", "BACKEND_URL", "\"${props["BACKEND_URL"]}\"")
-        buildConfigField("String", "PHONE_NUMBER", "\"${props["PHONE_NUMBER"]}\"")
+
+        // If values are missing, fail fast with a readable error
+        val backendUrl = props.getProperty("BACKEND_URL")
+            ?: error("local.properties is missing BACKEND_URL")
+        val phoneNumber = props.getProperty("PHONE_NUMBER")
+            ?: error("local.properties is missing PHONE_NUMBER")
+
+        buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
+        buildConfigField("String", "PHONE_NUMBER", "\"$phoneNumber\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -39,19 +51,15 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "1.8"
-    }
+
     buildFeatures {
         compose = true
         buildConfig = true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.8"
-    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -61,13 +69,18 @@ android {
 
 dependencies {
     // Compose and UI
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation(platform("androidx.compose:compose-bom:2024.11.00"))
+    implementation("androidx.activity:activity-compose:1.12.3")
+    implementation(platform("androidx.compose:compose-bom:2026.01.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
+
+    // Vonage Client SDK
     implementation("com.vonage:client-library:1.0.1")
 
     // Networking
-    implementation("com.squareup.okhttp3:okhttp:4.11.0")
-    implementation("com.google.code.gson:gson:2.10.1")
+    implementation("com.squareup.okhttp3:okhttp:5.3.2")
+    implementation("com.google.code.gson:gson:2.13.2")
+
+    // Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 }
