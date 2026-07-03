@@ -1,6 +1,7 @@
 package com.vonage.verify2.app
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -143,14 +144,21 @@ fun VerificationScreen() {
                                 val start = startVerification(phone)
                                 val requestId = start.requestId
                                 val checkUrl = start.checkUrl
+                                Log.d("MyApp", "codeFromSa $checkUrl")
 
                                 // 2) If backend provided a check_url, attempt Silent Auth (on-device)
                                 if (!checkUrl.isNullOrBlank()) {
                                     statusMessage = "Attempting Silent Authentication..."
 
+                                    Log.d("MyApp", "attempting sa")
+
                                     try {
                                         // Perform Silent Auth check_url call via Vonage Client SDK
+                                        Log.d("MyApp", "checking $checkUrl")
                                         val codeFromSa = checkSilentAuth(checkUrl)
+
+                                        Log.d("MyApp", "codefromsa $codeFromSa")
+
 
                                         // Submit code to backend for final validation
                                         val result = submitCode(requestId, codeFromSa)
@@ -163,13 +171,16 @@ fun VerificationScreen() {
                                             uiState = VerifyUiState.EnterSms(requestId)
                                             statusMessage =
                                                 "Silent Authentication didn't complete. Please enter the SMS code."
+                                                Log.d("MyApp", "SA did not complete")
                                         }
                                     } catch (e: Exception) {
                                         // Silent Auth attempt failed; fall back to SMS (and optionally force fallback)
                                         statusMessage = "Silent Authentication failed. Switching to SMS..."
 
+                                        Log.d("MyApp", "SA failed with ${e.message}")
+
                                         // Best-effort: force fallback now to avoid waiting for SA timeout
-                                        runCatching { requestNextWorkflow(requestId) }
+//                                        runCatching { requestNextWorkflow(requestId) }
 
                                         uiState = VerifyUiState.EnterSms(requestId)
                                         statusMessage = "Please enter the SMS code."
@@ -293,6 +304,8 @@ private suspend fun checkSilentAuth(url: String): String = withContext(Dispatche
         maxRedirectCount = 10
     )
 
+    Log.d("MyApp", "checking SA code")
+
     val response = VGCellularRequestClient.getInstance()
         .startCellularGetRequest(params, false)
 
@@ -334,6 +347,7 @@ private suspend fun submitCode(requestId: String, code: String): CheckCodeRespon
         .build()
 
     val response = client.newCall(request).execute()
+    Log.d("MyApp", "response is $response")
     if (!response.isSuccessful) {
         val errorBody = response.body?.string() ?: "Unknown error"
         throw IOException("Check code failed: HTTP ${response.code} - $errorBody")
@@ -341,7 +355,8 @@ private suspend fun submitCode(requestId: String, code: String): CheckCodeRespon
 
     val body = response.body?.string() ?: throw IOException("Empty response body")
     val jsonBody = Gson().fromJson(body, JsonObject::class.java)
-
+    Log.d("MyApp", "body  is $body")
+    Log.d("MyApp", "jsonbody  is $jsonBody")
     CheckCodeResponse(
         verified = jsonBody.get("verified")?.asBoolean ?: false,
         status = jsonBody.get("status")?.asString
