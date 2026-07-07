@@ -66,7 +66,7 @@ Then update the name of the file from `.env_template` to `.env`.
 
 To spin up the app, run the following:
 
-`fastapi dev`
+`uvicorn main:app --reload --port 4000`
 
 ### 6. Try it out!
 

@@ -46,6 +46,7 @@ private sealed class VerifyUiState {
     data object EnterPhone: VerifyUiState()
     data object Loading: VerifyUiState()
     data class EnterSms(val requestId: String) : VerifyUiState()
+    data class EnterEmailOtp(val requestId: String) : VerifyUiState()
     data class Verified(val method: String) : VerifyUiState()
     data class Error(val message: String) : VerifyUiState()
 }
@@ -57,14 +58,22 @@ private data class CheckCodeResponse(
     val verified: Boolean,
     val status: String?
 )
-
+/**
+ * Backend /send-email-otp response model
+ */
+private data class StartEmailVerificationResponse(
+    val requestId: String
+)
 /**
  * Backend /verification response model
  */
 private data class StartVerificationResponse(
     val requestId: String,
-    val checkUrl: String?
+    val checkUrl: String?,
+    val channel: String
 )
+
+
 @Composable
 fun VerifyApp() {
     MaterialTheme {
@@ -81,6 +90,7 @@ fun VerificationScreen() {
 
     var uiState by remember { mutableStateOf<VerifyUiState>(VerifyUiState.EnterPhone) }
     var statusMessage by remember { mutableStateOf("") }
+    var emailCode by remember { mutableStateOf("") }
 
     val scope = rememberCoroutineScope()
 
@@ -122,6 +132,20 @@ fun VerificationScreen() {
             )
         }
 
+        // Show Email OTP input only if we are in EnterEmailOtp state
+        val requestIdForEmail = (uiState as? VerifyUiState.EnterEmailOtp)?.requestId
+        if (requestIdForEmail != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = emailCode,
+                onValueChange = { emailCode = it },
+                enabled = uiState !is VerifyUiState.Loading,
+                label = { Text("Email verification code") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
 
         when (uiState) {
@@ -144,52 +168,45 @@ fun VerificationScreen() {
                                 val start = startVerification(phone)
                                 val requestId = start.requestId
                                 val checkUrl = start.checkUrl
+                                val channel = start.channel
                                 Log.d("MyApp", "codeFromSa $checkUrl")
 
-                                // 2) If backend provided a check_url, attempt Silent Auth (on-device)
-                                if (!checkUrl.isNullOrBlank()) {
-                                    statusMessage = "Attempting Silent Authentication..."
-
-                                    Log.d("MyApp", "attempting sa")
-
-                                    try {
-                                        // Perform Silent Auth check_url call via Vonage Client SDK
-                                        Log.d("MyApp", "checking $checkUrl")
-                                        val codeFromSa = checkSilentAuth(checkUrl)
-
-                                        Log.d("MyApp", "codefromsa $codeFromSa")
-
-
-                                        // Submit code to backend for final validation
-                                        val result = submitCode(requestId, codeFromSa)
-
-                                        if (result.verified) {
-                                            uiState = VerifyUiState.Verified("Silent Authentication")
-                                            statusMessage = "Verified via Silent Authentication"
-                                        } else {
-                                            // Silent Auth didn't complete, fall back to SMS
+                                when (channel) {
+                                    "silent_auth" -> {
+                                        statusMessage = "Attempting silent authentication ..."
+                                        try {
+                                            val codeFromSa = checkSilentAuth(checkUrl!!)
+                                            // Submit code to backend for final validation
+                                            val result = submitCode(requestId, codeFromSa)
+                                            if (result.verified) {
+                                                uiState =
+                                                    VerifyUiState.Verified("Silent Authentication")
+                                                statusMessage = "Verified via Silent Authentication"
+                                            } else {
+                                                uiState = VerifyUiState.EnterSms(requestId)
+                                                statusMessage =
+                                                    "Silent auth didn't complete. Please enter SMS code."
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.d("MyApp", "SA failed with ${e.message}")
                                             uiState = VerifyUiState.EnterSms(requestId)
                                             statusMessage =
-                                                "Silent Authentication didn't complete. Please enter the SMS code."
-                                                Log.d("MyApp", "SA did not complete")
+                                                "Silent Auth failed. Please enter the SMS code."
                                         }
-                                    } catch (e: Exception) {
-                                        // Silent Auth attempt failed; fall back to SMS (and optionally force fallback)
-                                        statusMessage = "Silent Authentication failed. Switching to SMS..."
-
-                                        Log.d("MyApp", "SA failed with ${e.message}")
-
-                                        // Best-effort: force fallback now to avoid waiting for SA timeout
-//                                        runCatching { requestNextWorkflow(requestId) }
-
-                                        uiState = VerifyUiState.EnterSms(requestId)
-                                        statusMessage = "Please enter the SMS code."
                                     }
-                                } else {
-                                    // No check_url → Silent Auth not available; go directly to SMS
-                                    runCatching { requestNextWorkflow(requestId) } // best-effort
-                                    uiState = VerifyUiState.EnterSms(requestId)
-                                    statusMessage = "Silent Authentication is not available. Please enter the SMS code."
+
+                                    "email_setup" -> {
+                                        // SIM swap flagged
+                                        uiState = VerifyUiState.EnterEmailOtp(requestId)
+                                        statusMessage =
+                                            "⚠️ Security check required. Please verify via email."
+                                    }
+
+                                    else -> {
+                                        // "sms_otp": Silent Auth unavailable, no SIM swap
+                                        uiState = VerifyUiState.EnterSms(requestId)
+                                        statusMessage = "Please enter the SMS code"
+                                    }
                                 }
                             } catch (e: Exception) {
                                 uiState = VerifyUiState.Error(e.message ?: "Unknown error")
@@ -235,6 +252,38 @@ fun VerificationScreen() {
                 }
             }
 
+            is VerifyUiState.EnterEmailOtp -> {
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = emailCode.isNotBlank(),
+                    onClick = {
+                        scope.launch {
+                            uiState = VerifyUiState.Loading
+                            statusMessage = ""
+
+                            try {
+                                val requestId = requestIdForEmail ?: throw IOException("Missing request_id")
+                                val result = submitCode(requestId, emailCode)
+
+                                if (result.verified) {
+                                    uiState = VerifyUiState.Verified("Email")
+                                    statusMessage = "Verified via Email"
+                                } else {
+                                    uiState = VerifyUiState.EnterEmailOtp(requestId)
+                                    statusMessage = "Invalid code. Please try again."
+                                }
+                            } catch (e: Exception) {
+                                uiState = VerifyUiState.Error(e.message ?: "Unknown error")
+                                statusMessage = "Error checking code: ${e.message}"
+                            }
+                        }
+                    }
+                ) {
+                    Text("Submit email code")
+                }
+            }
+
+
             is VerifyUiState.Verified -> {
                 val method = (uiState as VerifyUiState.Verified).method
                 Text("Success! Verified using $method.")
@@ -244,6 +293,7 @@ fun VerificationScreen() {
                     onClick = {
                         // Reset screen to try again
                         smsCode = ""
+                        emailCode = ""
                         statusMessage = ""
                         uiState = VerifyUiState.EnterPhone
                     }
@@ -278,6 +328,7 @@ private suspend fun startVerification(phone: String): StartVerificationResponse 
         .build()
 
     val response = client.newCall(request).execute()
+        Log.d("MyApp", "response is $response")
     if (!response.isSuccessful) {
         val errorBody = response.body?.string() ?: "Unknown error"
         throw IOException("Start verification failed: HTTP ${response.code} - $errorBody")
@@ -286,10 +337,13 @@ private suspend fun startVerification(phone: String): StartVerificationResponse 
     val body = response.body?.string() ?: throw IOException("Empty response body")
     val jsonBody = Gson().fromJson(body, JsonObject::class.java)
 
+        Log.d("MyApp", "bosy is is $jsonBody")
     val requestId = jsonBody.get("request_id")?.asString ?: throw IOException("Missing request_id")
     val checkUrl = jsonBody.get("check_url")?.asString // may be null
+        val channel = jsonBody.get("channel")?.asString ?: "sms_otp" // default to sms_otp if missing
+        Log.d("MyApp", "starting verification process with $channel")
 
-    StartVerificationResponse(requestId, checkUrl)
+    StartVerificationResponse(requestId, checkUrl, channel)
 }
 
 /**
@@ -331,10 +385,37 @@ private suspend fun checkSilentAuth(url: String): String = withContext(Dispatche
     code
 }
 
+private suspend fun startEmailVerification(phone: String): StartEmailVerificationResponse =
+    withContext(Dispatchers.IO) {
+        val client = OkHttpClient()
+
+        val json = Gson().toJson(mapOf("phone" to phone))
+        val requestBody = json.toRequestBody("application/json".toMediaType())
+
+        val request = Request.Builder()
+            .url("$BACKEND_URL/send-email-otp")
+            .post(requestBody)
+            .build()
+
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+            val errorBody = response.body?.string() ?: "Unknown error"
+            throw IOException("Start email verification failed: HTTP ${response.code} - $errorBody")
+        }
+
+        val body = response.body?.string() ?: throw IOException("Empty response body")
+        val jsonBody = Gson().fromJson(body, JsonObject::class.java)
+        val requestId = jsonBody.get("request_id")?.asString
+            ?: throw IOException("Missing request_id")
+
+        StartEmailVerificationResponse(requestId)
+    }
+
 /**
  * Backend call: POST /check-code
- * Backend validates the code with Vonage and returns result synchronously
+ * Used for SMS, Silent Auth, and Email OTP — channel-agnostic
  */
+
 private suspend fun submitCode(requestId: String, code: String): CheckCodeResponse = withContext(Dispatchers.IO) {
     val client = OkHttpClient()
 
@@ -363,24 +444,24 @@ private suspend fun submitCode(requestId: String, code: String): CheckCodeRespon
     )
 }
 
-/**
- * Backend call: POST /next
- * Explicitly requests fallback to SMS workflow
- */
-private suspend fun requestNextWorkflow(requestId: String): Unit = withContext(Dispatchers.IO) {
-    val client = OkHttpClient()
-
-    val json = Gson().toJson(mapOf("requestId" to requestId))
-    val requestBody = json.toRequestBody("application/json".toMediaType())
-
-    val request = Request.Builder()
-        .url("$BACKEND_URL/next")
-        .post(requestBody)
-        .build()
-
-    val response = client.newCall(request).execute()
-    if (!response.isSuccessful) {
-        val errorBody = response.body?.string() ?: "Unknown error"
-        throw IOException("Next workflow failed: HTTP ${response.code} - $errorBody")
-    }
-}
+///**
+// * Backend call: POST /next
+// * Explicitly requests fallback to SMS workflow
+// */
+//private suspend fun requestNextWorkflow(requestId: String): Unit = withContext(Dispatchers.IO) {
+//    val client = OkHttpClient()
+//
+//    val json = Gson().toJson(mapOf("requestId" to requestId))
+//    val requestBody = json.toRequestBody("application/json".toMediaType())
+//
+//    val request = Request.Builder()
+//        .url("$BACKEND_URL/next")
+//        .post(requestBody)
+//        .build()
+//
+//    val response = client.newCall(request).execute()
+//    if (!response.isSuccessful) {
+//        val errorBody = response.body?.string() ?: "Unknown error"
+//        throw IOException("Next workflow failed: HTTP ${response.code} - $errorBody")
+//    }
+//}

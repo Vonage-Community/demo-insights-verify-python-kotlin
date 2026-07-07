@@ -7,7 +7,15 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from vonage import Auth, Vonage
-from vonage_verify import SilentAuthChannel, VerifyRequest, SmsChannel
+from vonage_http_client import HttpRequestError
+from vonage_verify import SilentAuthChannel, VerifyRequest, SmsChannel, EmailChannel, StartVerificationResponse
+from vonage_network_sim_swap import SimSwapCheckRequest, SwapStatus
+from vonage_identity_insights import (
+    IdentityInsightsRequest,
+    InsightsRequest,
+    EmptyInsight,
+    SimSwapInsight,
+)
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +42,14 @@ verify_client = Vonage(
         application_id=os.environ["VONAGE_APPLICATION_ID"],
         private_key=os.environ["VONAGE_PRIVATE_KEY_PATH"],
     )
+)
+
+identity_insights_client = Vonage(
+    Auth(
+        application_id=os.environ["VONAGE_APPLICATION_ID"],
+        private_key=os.environ["VONAGE_PRIVATE_KEY_PATH"],
+    ),
+    http_client_options={"api_host": "api-eu.vonage.com"}
 )
 
 
@@ -101,51 +117,153 @@ async def start_verification(req: VerificationRequest):
     - Stores verification request in memory
     - Returns request_id and check_url to client
     """
+
+    phone = req.phone
+
+    logger.info(f"Beginning authentication process for: {phone}")
+
+    logger.info(f"Now checking SIM status for: {phone}")
+    
+    # Create Vonage SIM swap check request
+    # swap_request = SimSwapCheckRequest(
+    #     phone_number=phone,
+    #     max_age="501"
+    # )
+    
+
+    insights_request = IdentityInsightsRequest(
+        phone_number=phone,
+        purpose="FraudPreventionAndDetection",
+        insights=InsightsRequest(
+            format=EmptyInsight(), 
+            sim_swap=SimSwapInsight(period=240)
+        )
+)
+    
     try:
-        phone = req.phone
+        print(insights_request.model_dump(exclude_none=True))
+        sim_swapped = identity_insights_client.identity_insights.requests (insights_request).insights.sim_swap.is_swapped
+        # sim_swapped: SwapStatus = verify_client.network_sim_swap.check(swap_request)
 
-        logger.info(f"Received verification request for: {phone}")
+        logger.info(f"Swap status for : {phone} is: {sim_swapped}")
 
-        # Create Vonage verification request
+        if sim_swapped or sim_swapped is None:
+            logger.info(f"SIM swap flagged, stepping up to email")
+            return {"channel": "email_stepup",
+                    "request_id": None}
+        
+        try:
+
+            logger.info(f"Now beginning silent verification for: {phone}")
+
+            # Create Vonage verification request
+            silent_auth_verify_request = VerifyRequest(
+                brand="DemoApp",
+                workflow=[SilentAuthChannel(to=req.phone,)],
+                coverage_check=True
+            )
+
+            silent_auth_verify_response: StartVerificationResponse = verify_client.verify.start_verification(silent_auth_verify_request)
+
+            return {
+                "channel_id": "silent_auth",
+                "request_id": silent_auth_verify_response.request_id,
+                "check_url": silent_auth_verify_response.check_url
+            }
+        
+        except HttpRequestError as e:
+            if e.response and e.response.status_code == 412:
+                # Silent Auth unavailable, no SIM swap — safe to use SMS
+                sms_request = VerifyRequest(
+                    brand="DemoApp",
+                    workflow=[SmsChannel(to=phone)],
+                )
+                response = verify_client.verify.start_verification(sms_request)
+                return {"channel": "sms_otp", "request_id": response.request_id}
+            raise
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# @app.post("/verification")
+# async def start_verification(req: VerificationRequest):
+#     """
+#     Start verification:
+#     - Creates Vonage request (silent_auth -> sms)
+#     - Stores verification request in memory
+#     - Returns request_id and check_url to client
+#     """
+#     try:
+#         phone = req.phone
+
+#         logger.info(f"Received verification request for: {phone}")
+
+#         # Create Vonage verification request
+#         verify_request = VerifyRequest(
+#             brand="DemoApp",
+#             workflow=[SilentAuthChannel(to=req.phone),],
+#             coverage_check=True
+#         )
+
+#         result = verify_client.verify.start_verification(verify_request)
+
+#         logger.info(f"Vonage Verify2 newRequest result: {result}")
+#         logger.info(f"Now checking SIM status for: {phone}")
+
+#         swap_request = SimSwapCheckRequest(
+#             phone_number=phone
+#         )
+        
+#         swap_response = verify_client.network_sim_swap.check(swap_request)
+
+
+
+
+#         # Store verification request
+#         now = get_iso_now()
+#         verification_store[result.request_id] = {
+#             "requestId": result.request_id,
+#             "phone": phone,
+#             "status": "pending",
+#             "createdAt": now,
+#             "updatedAt": now,
+#             "lastEvent": None,
+#         }
+
+#         return {
+#             "request_id": result.request_id,
+#             "check_url": getattr(result, "check_url", None),
+#         }
+
+#     except Exception as error:
+#         status_code = getattr(error.response, "status_code", 500) if hasattr(error, "response") else 500
+#         details = getattr(error.response, "data", str(error)) if hasattr(error, "response") else str(error)
+
+#         logger.error(f"Error /verification: {details}")
+#         raise HTTPException(
+#             status_code=status_code,
+#             detail={
+#                 "error": "Failed to start verification",
+#                 "details": details if isinstance(details, str) else None,
+#             },
+#         )
+
+@app.post("/send-email-otp")
+async def send_email_otp(body: dict):
+    email = body.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    try:
         verify_request = VerifyRequest(
             brand="DemoApp",
-            workflow=[SilentAuthChannel(to=req.phone),
-                    SmsChannel(to=req.phone)],
-            coverage_check=True
+            workflow=[EmailChannel(to=email)],
         )
+        response = verify_client.verify.start_verification(verify_request)
+        return {"request_id": response.request_id}
 
-        result = verify_client.verify.start_verification(verify_request)
-
-        logger.info(f"Vonage Verify2 newRequest result: {result}")
-
-        # Store verification request
-        now = get_iso_now()
-        verification_store[result.request_id] = {
-            "requestId": result.request_id,
-            "phone": phone,
-            "status": "pending",
-            "createdAt": now,
-            "updatedAt": now,
-            "lastEvent": None,
-        }
-
-        return {
-            "request_id": result.request_id,
-            "check_url": getattr(result, "check_url", None),
-        }
-
-    except Exception as error:
-        status_code = getattr(error.response, "status_code", 500) if hasattr(error, "response") else 500
-        details = getattr(error.response, "data", str(error)) if hasattr(error, "response") else str(error)
-
-        logger.error(f"Error /verification: {details}")
-        raise HTTPException(
-            status_code=status_code,
-            detail={
-                "error": "Failed to start verification",
-                "details": details if isinstance(details, str) else None,
-            },
-        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/callback")
 async def callback(req: CallbackRequest):
