@@ -20,6 +20,10 @@ from vonage_identity_insights import (
 # Load environment variables
 load_dotenv()
 
+USER_EMAIL_STORE = {
+    os.environ["USER_PHONE_NUMBER"]: os.environ["USER_EMAIL"]
+}
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -75,6 +79,12 @@ class CheckCodeRequest(BaseModel):
 
 class NextWorkflowRequest(BaseModel):
     requestId: str
+
+class StatusResponse(BaseModel):
+    request_id: str
+    status: str
+    updated_at: str
+    completed: bool
 
 class StatusResponse(BaseModel):
     request_id: str
@@ -166,7 +176,7 @@ async def start_verification(req: VerificationRequest):
             silent_auth_verify_response: StartVerificationResponse = verify_client.verify.start_verification(silent_auth_verify_request)
 
             return {
-                "channel_id": "silent_auth",
+                "channel": "silent_auth",
                 "request_id": silent_auth_verify_response.request_id,
                 "check_url": silent_auth_verify_response.check_url
             }
@@ -249,8 +259,12 @@ async def start_verification(req: VerificationRequest):
 #         )
 
 @app.post("/send-email-otp")
-async def send_email_otp(body: dict):
-    email = body.get("email")
+async def send_email_otp(req: VerificationRequest):
+    
+    
+    
+    email = USER_EMAIL_STORE.get(req.phone)
+    logger.info(f"Now beginning email verification for: {email}")
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
 
@@ -260,6 +274,7 @@ async def send_email_otp(body: dict):
             workflow=[EmailChannel(to=email)],
         )
         response = verify_client.verify.start_verification(verify_request)
+        logger.info(f"Request id is: {response.request_id}")
         return {"request_id": response.request_id}
 
     except Exception as e:
@@ -350,64 +365,14 @@ async def check_code(req: CheckCodeRequest):
     Check code (for SMS or Silent Auth code).
     Backend validates the code with Vonage.
     """
+
+    logger.info(f"Request id is: {req.request_id}")
+    logger.info(f"Code is: {req.code}")
     try:
-        request_id = req.request_id
-        code = req.code
-
-        entry = verification_store.get(request_id)
-        if not entry:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Unknown request_id",
-            )
-
-        logger.info(f"Checking code for request: {request_id}")
-
-        # Check code with Vonage
-        result = verify_client.verify.check_code(request_id, code)
-        logger.info(f"Vonage Verify2 checkCode result: {result}")
-
-        print("RESULT: ===> ", result)
-
-        verified = result.model_dump()["status"] == "completed"
-
-        # Update status in store
-        if verified:
-            updated = {
-                **entry,
-                "status": "completed",
-                "updatedAt": get_iso_now(),
-                "lastEvent": {"source": "check_code", "result": result},
-            }
-            verification_store[request_id] = updated
-
-        return {
-            "verified": verified,
-            "status": result.model_dump()["status"],
-        }
-
-    except HTTPException:
-        raise
-    except Exception as error:
-        status_code = getattr(error.response, "status_code", 500) if hasattr(error, "response") else 500
-        details = getattr(error.response, "data", str(error)) if hasattr(error, "response") else str(error)
-
-        logger.error(f"Error /check-code: {details}")
-
-        # If it's an invalid code error, return 200 with verified: false
-        if status_code in [400, 404]:
-            return {
-                "verified": False,
-                "error": details if isinstance(details, str) else "Invalid code",
-            }
-
-        raise HTTPException(
-            status_code=status_code,
-            detail={
-                "error": "Failed to check code",
-                "details": details if isinstance(details, str) else None,
-            },
-        )
+        verify_client.verify.check_code(req.request_id, req.code)
+        return {"verified": True}
+    except Exception as e:
+        return {"verified": False, "status": str(e)}
 
 @app.post("/next")
 async def next_workflow(req: NextWorkflowRequest):

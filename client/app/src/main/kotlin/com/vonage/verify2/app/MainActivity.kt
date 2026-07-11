@@ -45,7 +45,7 @@ class MainActivity : ComponentActivity() {
 private sealed class VerifyUiState {
     data object EnterPhone: VerifyUiState()
     data object Loading: VerifyUiState()
-    data class EnterSms(val requestId: String) : VerifyUiState()
+    data class EnterSms(val requestId: String?) : VerifyUiState()
     data class EnterEmailOtp(val requestId: String) : VerifyUiState()
     data class Verified(val method: String) : VerifyUiState()
     data class Error(val message: String) : VerifyUiState()
@@ -68,7 +68,7 @@ private data class StartEmailVerificationResponse(
  * Backend /verification response model
  */
 private data class StartVerificationResponse(
-    val requestId: String,
+    val requestId: String?,
     val checkUrl: String?,
     val channel: String
 )
@@ -195,9 +195,11 @@ fun VerificationScreen() {
                                         }
                                     }
 
-                                    "email_setup" -> {
+                                    "email_stepup" -> {
+                                        Log.d("MyApp", "SIM swap flagged — routing to email verification")
                                         // SIM swap flagged
-                                        uiState = VerifyUiState.EnterEmailOtp(requestId)
+                                        val emailStart = startEmailVerification(phone)
+                                        uiState = VerifyUiState.EnterEmailOtp(emailStart.requestId)
                                         statusMessage =
                                             "⚠️ Security check required. Please verify via email."
                                     }
@@ -225,15 +227,15 @@ fun VerificationScreen() {
                     enabled = smsCode.isNotBlank(),
                     onClick = {
                         scope.launch {
+                            // Capture requestId BEFORE changing uiState
+                            val requestId = (uiState as? VerifyUiState.EnterSms)?.requestId
+                                ?: return@launch
+
                             uiState = VerifyUiState.Loading
                             statusMessage = ""
 
                             try {
-                                val requestId = requestIdForSms ?: throw IOException("Missing request_id")
-
-                                // Submit code to backend - backend responds synchronously
                                 val result = submitCode(requestId, smsCode)
-
                                 if (result.verified) {
                                     uiState = VerifyUiState.Verified("SMS")
                                     statusMessage = "Verified via SMS"
@@ -253,18 +255,23 @@ fun VerificationScreen() {
             }
 
             is VerifyUiState.EnterEmailOtp -> {
+
+
                 Button(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = emailCode.isNotBlank(),
                     onClick = {
                         scope.launch {
+                            // Capture requestId BEFORE changing uiState
+                            val requestId = (uiState as? VerifyUiState.EnterEmailOtp)?.requestId
+                                ?: return@launch
+                            Log.d("MyApp", "email request id is $requestId")
+
                             uiState = VerifyUiState.Loading
                             statusMessage = ""
 
                             try {
-                                val requestId = requestIdForEmail ?: throw IOException("Missing request_id")
                                 val result = submitCode(requestId, emailCode)
-
                                 if (result.verified) {
                                     uiState = VerifyUiState.Verified("Email")
                                     statusMessage = "Verified via Email"
@@ -282,6 +289,8 @@ fun VerificationScreen() {
                     Text("Submit email code")
                 }
             }
+
+
 
 
             is VerifyUiState.Verified -> {
@@ -315,37 +324,55 @@ fun VerificationScreen() {
  * Backend call: POST /verification
  * Returns (request_id, check_url?)
  */
+
 private suspend fun startVerification(phone: String): StartVerificationResponse =
     withContext(Dispatchers.IO) {
-    val client = OkHttpClient()
+        val client = OkHttpClient()
 
-    val json = Gson().toJson(mapOf("phone" to phone))
-    val requestBody = json.toRequestBody("application/json".toMediaType())
+        val json = Gson().toJson(mapOf("phone" to phone))
+        val requestBody = json.toRequestBody("application/json".toMediaType())
 
-    val request = Request.Builder()
-        .url("$BACKEND_URL/verification")
-        .post(requestBody)
-        .build()
+        val request = Request.Builder()
+            .url("$BACKEND_URL/verification")
+            .post(requestBody)
+            .build()
 
-    val response = client.newCall(request).execute()
+        val response = client.newCall(request).execute()
         Log.d("MyApp", "response is $response")
-    if (!response.isSuccessful) {
-        val errorBody = response.body?.string() ?: "Unknown error"
-        throw IOException("Start verification failed: HTTP ${response.code} - $errorBody")
-    }
+        if (!response.isSuccessful) {
+            val errorBody = response.body?.string() ?: "Unknown error"
+            throw IOException("Start verification failed: HTTP ${response.code} - $errorBody")
+        }
 
-    val body = response.body?.string() ?: throw IOException("Empty response body")
-    val jsonBody = Gson().fromJson(body, JsonObject::class.java)
+        val body = response.body?.string() ?: throw IOException("Empty response body")
+        val jsonBody = Gson().fromJson(body, JsonObject::class.java)
+        Log.d("MyApp", "body is $jsonBody")
 
-        Log.d("MyApp", "bosy is is $jsonBody")
-    val requestId = jsonBody.get("request_id")?.asString ?: throw IOException("Missing request_id")
-    val checkUrl = jsonBody.get("check_url")?.asString // may be null
-        val channel = jsonBody.get("channel")?.asString ?: "sms_otp" // default to sms_otp if missing
+        // Parse channel first — everything else depends on it
+        val channel = jsonBody.get("channel")
+            ?.takeIf { !it.isJsonNull }
+            ?.asString ?: "sms_otp"
         Log.d("MyApp", "starting verification process with $channel")
 
-    StartVerificationResponse(requestId, checkUrl, channel)
-}
+        // check_url only matters for silent_auth
+        val checkUrl = jsonBody.get("check_url")
+            ?.takeIf { !it.isJsonNull }
+            ?.asString
 
+        // request_id is required for sms_otp and email_setup (needed for /check-code and /start-email)
+        // for silent_auth it's still useful for submitCode() but not strictly required upfront
+        val requestId = when (channel) {
+            "email_stepup" -> null  // no Verify request started yet — requestId comes from /start-email
+            "silent_auth" -> jsonBody.get("request_id")
+                ?.takeIf { !it.isJsonNull }
+                ?.asString ?: ""
+            else -> jsonBody.get("request_id")
+                ?.takeIf { !it.isJsonNull }
+                ?.asString ?: throw IOException("Missing request_id")
+        }
+
+        StartVerificationResponse(requestId, checkUrl, channel)
+    }
 /**
  * Silent Auth cellular GET to check_url.
  * Expects a JSON body containing a "code" field.
@@ -416,7 +443,7 @@ private suspend fun startEmailVerification(phone: String): StartEmailVerificatio
  * Used for SMS, Silent Auth, and Email OTP — channel-agnostic
  */
 
-private suspend fun submitCode(requestId: String, code: String): CheckCodeResponse = withContext(Dispatchers.IO) {
+private suspend fun submitCode(requestId: String?, code: String): CheckCodeResponse = withContext(Dispatchers.IO) {
     val client = OkHttpClient()
 
     val json = Gson().toJson(mapOf("request_id" to requestId, "code" to code))
