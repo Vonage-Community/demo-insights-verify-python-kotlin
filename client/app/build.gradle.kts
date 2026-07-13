@@ -13,6 +13,12 @@ val props = Properties().apply {
     load(localPropsFile.inputStream())
 }
 
+// If values are missing, fail fast with a readable error
+val backendUrl = props.getProperty("BACKEND_URL")
+    ?: error("local.properties is missing BACKEND_URL")
+val phoneNumber = props.getProperty("PHONE_NUMBER")
+    ?: error("local.properties is missing PHONE_NUMBER")
+val useMockClient = props.getProperty("USE_MOCK_CLIENT", "false")
 
 android {
     namespace = "com.vonage.verify2.app"
@@ -25,13 +31,6 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-
-        // If values are missing, fail fast with a readable error
-        val backendUrl = props.getProperty("BACKEND_URL")
-            ?: error("local.properties is missing BACKEND_URL")
-        val phoneNumber = props.getProperty("PHONE_NUMBER")
-            ?: error("local.properties is missing PHONE_NUMBER")
-
         buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
         buildConfigField("String", "PHONE_NUMBER", "\"$phoneNumber\"")
 
@@ -42,17 +41,18 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("Boolean", "USE_MOCK_CLIENT", useMockClient)
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            buildConfigField("Boolean", "USE_MOCK_CLIENT", useMockClient)
+            signingConfig = signingConfigs.getByName("debug")
         }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
     }
 
     buildFeatures {
