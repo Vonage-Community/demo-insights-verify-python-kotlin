@@ -80,9 +80,9 @@ async def verify_code(req: CheckCodeRequest):
     code = req.code
     logger.info(f"Checking code for request_id: {request_id} with code: {code}")
     try:
-        check_code(request_id, code)
+        response = check_code(request_id, code)
         logger.info("Verification success!")
-        return {"verified": True}
+        return response
     except Exception as e:
         logger.info("Verification failure")
         return {"verified": False, "status": str(e)}

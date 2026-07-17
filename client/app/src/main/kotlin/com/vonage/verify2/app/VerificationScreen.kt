@@ -109,6 +109,7 @@ fun VerificationScreen(client: VerifyApiClient) {
                                         statusMessage = "Attempting silent authentication..."
                                         try {
                                             val codeFromSa = client.checkSilentAuth(checkUrl!!)
+                                            Log.d("MyApp", "code from SA: $codeFromSa")
                                             val result = client.submitCode(requestId, codeFromSa)
                                             if (result.verified) {
                                                 uiState = VerifyUiState.Verified("Silent Authentication")

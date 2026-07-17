@@ -90,5 +90,5 @@ def check_code(request_id: str, code: str) -> bool:
     """
     Validates OTP code with Vonage. Returns True if verified.
     """
-    verify_client.verify.check_code(request_id, code)
-    return True
+    response = verify_client.verify.check_code(request_id, code)
+    return {"verified": True, "status": response.status}
