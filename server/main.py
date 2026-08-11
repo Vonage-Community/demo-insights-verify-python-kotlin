@@ -3,7 +3,6 @@ import logging
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from vonage_http_client import HttpRequestError
 from vonage_handlers import (
     check_sim_swap,
     start_silent_auth,
@@ -14,6 +13,7 @@ from vonage_handlers import (
 
 load_dotenv()
 
+# USe in-memory storage to simulate a database; this is not appropriate for a production grade application
 USER_EMAIL_STORE = {os.environ["USER_PHONE_NUMBER"]: os.environ["USER_EMAIL"]}
 
 logging.basicConfig(level=logging.INFO)
@@ -21,15 +21,23 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+
 class VerificationRequest(BaseModel):
     phone: str = Field(..., description="Phone number to verify")
+
 
 class CheckCodeRequest(BaseModel):
     request_id: str
     code: str
 
+
 @app.post("/verification")
 async def start_verification(req: VerificationRequest):
+    """
+    Starts the verification process:
+    - Check if SIM is swapped-- if sim_swapped: True, fallback to email
+    - If sim_swapped: False, begin Silent Authentication
+    """
     phone = req.phone
     logger.info(f"Beginning authentication process for: {phone}")
 
@@ -46,25 +54,35 @@ async def start_verification(req: VerificationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/fallback-sms")
 async def fallback_sms(req: VerificationRequest):
-    # NOTE: overrides to real number for demo/testing purposes
-    # phone = req.phone
-    phone = os.environ["USER_PHONE_NUMBER"]
+
+    phone = req.phone
+    # Uncomment the line below and comment out the line above
+    # to test this app with a Virtual Operator number and receive an OTP
+    # to a real phone number
+    # phone = os.environ["USER_PHONE_NUMBER"]
+
     logger.info(f"SMS fallback requested, sending to: {phone}")
     try:
         return start_sms(phone)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/send-email-otp")
 async def send_email_otp(req: VerificationRequest):
+    """
+    Starts the verification process via email:
+    - Check if there is a stored email -- if no email, raise exception
+    - If there is an email, begin verification
+    """
     phone = req.phone
 
     logger.info(f"Stepping up to email for verification process for: {phone}")
-    logger.info("Getting email address from simulated user database")
-
     email = USER_EMAIL_STORE.get(phone)
+    logger.info(f"Getting email address from simulated user database: {email}")
 
     if not email:
         raise HTTPException(status_code=404, detail="No email on file for this number")
@@ -74,6 +92,7 @@ async def send_email_otp(req: VerificationRequest):
         return start_email(phone, email)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/check-code")
 async def verify_code(req: CheckCodeRequest):
@@ -88,9 +107,9 @@ async def verify_code(req: CheckCodeRequest):
         logger.info("Verification failure")
         return {"verified": False, "status": str(e)}
 
+
 if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("PORT", 4000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-

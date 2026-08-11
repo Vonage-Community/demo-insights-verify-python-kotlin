@@ -2,8 +2,13 @@ import os
 import logging
 from dotenv import load_dotenv
 from vonage import Auth, Vonage
-from vonage_http_client import HttpRequestError
-from vonage_verify import SilentAuthChannel, VerifyRequest, SmsChannel, EmailChannel, StartVerificationResponse
+from vonage_verify import (
+    SilentAuthChannel,
+    VerifyRequest,
+    SmsChannel,
+    EmailChannel,
+    StartVerificationResponse,
+)
 from vonage_identity_insights import (
     IdentityInsightsRequest,
     InsightsRequest,
@@ -27,8 +32,9 @@ identity_insights_client = Vonage(
         application_id=os.environ["VONAGE_APPLICATION_ID"],
         private_key=os.environ["VONAGE_PRIVATE_KEY_PATH"],
     ),
-    http_client_options={"api_host": "api-eu.vonage.com"}
+    http_client_options={"api_host": "api-eu.vonage.com"},
 )
+
 
 def check_sim_swap(phone: str) -> bool | None:
     """
@@ -38,11 +44,13 @@ def check_sim_swap(phone: str) -> bool | None:
         phone_number=phone,
         purpose="FraudPreventionAndDetection",
         insights=InsightsRequest(
-            format=EmptyInsight(),
-            sim_swap=SimSwapInsight(period=240)
-        )
+            format=EmptyInsight(), sim_swap=SimSwapInsight(period=240)
+        ),
     )
-    return identity_insights_client.identity_insights.requests(insights_request).insights.sim_swap.is_swapped
+    return identity_insights_client.identity_insights.requests(
+        insights_request
+    ).insights.sim_swap.is_swapped
+
 
 def start_silent_auth(phone: str) -> dict:
     """
@@ -51,16 +59,17 @@ def start_silent_auth(phone: str) -> dict:
     Raises HttpRequestError with 412 if Silent Auth unavailable.
     """
     request = VerifyRequest(
-        brand="DemoApp",
-        workflow=[SilentAuthChannel(to=phone)],
-        coverage_check=True
+        brand="DemoApp", workflow=[SilentAuthChannel(to=phone)], coverage_check=True
     )
-    response: StartVerificationResponse = verify_client.verify.start_verification(request)
+    response: StartVerificationResponse = verify_client.verify.start_verification(
+        request
+    )
     return {
         "channel": "silent_auth",
         "request_id": response.request_id,
-        "check_url": response.check_url
+        "check_url": response.check_url,
     }
+
 
 def start_sms(phone: str) -> dict:
     """
@@ -75,6 +84,7 @@ def start_sms(phone: str) -> dict:
     response = verify_client.verify.start_verification(request)
     return {"channel": "sms_otp", "request_id": response.request_id}
 
+
 def start_email(phone: str, email: str) -> dict:
     """
     Starts email OTP verification.
@@ -86,6 +96,7 @@ def start_email(phone: str, email: str) -> dict:
     )
     response = verify_client.verify.start_verification(request)
     return {"request_id": response.request_id}
+
 
 def check_code(request_id: str, code: str) -> bool:
     """

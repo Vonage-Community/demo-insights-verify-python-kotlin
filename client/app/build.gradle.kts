@@ -8,7 +8,7 @@ plugins {
 val localPropsFile = rootProject.file("local.properties")
 val props = Properties().apply {
     if (!localPropsFile.exists()) {
-        error("Missing local.properties in the project root. Add BACKEND_URL and PHONE_NUMBER there.")
+        error("Missing local.properties in the project root. Add BACKEND_URL to file.")
     }
     load(localPropsFile.inputStream())
 }
@@ -16,9 +16,6 @@ val props = Properties().apply {
 // If values are missing, fail fast with a readable error
 val backendUrl = props.getProperty("BACKEND_URL")
     ?: error("local.properties is missing BACKEND_URL")
-val phoneNumber = props.getProperty("PHONE_NUMBER")
-    ?: error("local.properties is missing PHONE_NUMBER")
-val useMockClient = props.getProperty("USE_MOCK_CLIENT", "false")
 
 android {
     namespace = "com.vonage.verify2.app"
@@ -32,7 +29,6 @@ android {
         versionName = "1.0"
 
         buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
-        buildConfigField("String", "PHONE_NUMBER", "\"$phoneNumber\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -41,16 +37,12 @@ android {
     }
 
     buildTypes {
-        debug {
-            buildConfigField("Boolean", "USE_MOCK_CLIENT", useMockClient)
-        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField("Boolean", "USE_MOCK_CLIENT", useMockClient)
             signingConfig = signingConfigs.getByName("debug")
         }
     }

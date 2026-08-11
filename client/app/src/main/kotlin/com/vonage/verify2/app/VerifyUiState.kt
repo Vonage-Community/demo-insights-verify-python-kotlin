@@ -12,12 +12,3 @@ sealed class VerifyUiState {
 data class CheckCodeResponse(val verified: Boolean, val status: String?)
 data class StartEmailVerificationResponse(val requestId: String)
 data class StartVerificationResponse(val requestId: String?, val checkUrl: String?, val channel: String)
-
-interface VerifyApiClient {
-    suspend fun startVerification(phone: String): StartVerificationResponse
-    suspend fun checkSilentAuth(url: String): String
-    suspend fun startEmailVerification(phone: String): StartEmailVerificationResponse
-    suspend fun submitCode(requestId: String?, code: String): CheckCodeResponse
-    suspend fun startSmsFallback(phone: String): StartVerificationResponse
-
-}

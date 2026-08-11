@@ -27,7 +27,7 @@ fun VerifyApp(client: VerifyApiClient) {
 
 @Composable
 fun VerificationScreen(client: VerifyApiClient) {
-    var phone by remember { mutableStateOf(DEFAULT_PHONE) }
+    var phone by remember { mutableStateOf("") }
     var smsCode by remember { mutableStateOf("") }
     var emailCode by remember { mutableStateOf("") }
     var uiState: VerifyUiState by remember { mutableStateOf(VerifyUiState.EnterPhone) }
@@ -54,7 +54,7 @@ fun VerificationScreen(client: VerifyApiClient) {
             onValueChange = { phone = it },
             enabled = uiState !is VerifyUiState.Loading,
             label = { Text("Phone number (with country prefix)") },
-            placeholder = { Text("+34600000000") },
+            placeholder = { Text("990123433") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
             modifier = Modifier.fillMaxWidth()
         )
@@ -107,45 +107,70 @@ fun VerificationScreen(client: VerifyApiClient) {
                                 val requestId = start.requestId
                                 val checkUrl = start.checkUrl
                                 val channel = start.channel
-                                Log.d("MyApp", "channel: $channel checkUrl: $checkUrl")
+                                Log.d("DemoApp", "Starting screen flow for channel: $channel")
 
                                 when (channel) {
                                     "silent_auth" -> {
+                                        Log.d("DemoApp", "Attempting Silent Authentication")
                                         statusMessage = "Attempting silent authentication..."
                                         try {
                                             val codeFromSa = client.checkSilentAuth(checkUrl!!)
-                                            Log.d("MyApp", "code from SA: $codeFromSa")
+                                            Log.d(
+                                                "DemoApp",
+                                                "Silent Auth flow: checking code: $codeFromSa"
+                                            )
                                             val result = client.submitCode(requestId, codeFromSa)
                                             if (result.verified) {
-                                                uiState = VerifyUiState.Verified("Silent Authentication")
+                                                uiState =
+                                                    VerifyUiState.Verified("Silent Authentication")
                                                 statusMessage = "Verified via Silent Authentication"
                                             } else {
                                                 uiState = VerifyUiState.EnterSms(requestId)
-                                                statusMessage = "Silent auth didn't complete. Please enter SMS code."
+                                                Log.d(
+                                                    "DemoApp",
+                                                    "Silent Authentication didn't complete, falling back to SMS"
+                                                )
+                                                statusMessage =
+                                                    "Silent Authentication didn't complete. Please enter SMS code."
                                             }
                                         } catch (e: SilentAuthUnavailableException) {
-                                            Log.d("MyApp", "Silent auth unavailable: ${e.message}, falling back to SMS")
+                                            Log.d(
+                                                "DemoApp",
+                                                "Silent Authentication unavailable: ${e.message}, falling back to SMS"
+                                            )
                                             try {
                                                 val fallback = client.startSmsFallback(phone)
                                                 uiState = VerifyUiState.EnterSms(fallback.requestId)
-                                                statusMessage = "Silent auth unavailable. Please enter the SMS code."
+                                                statusMessage =
+                                                    "Silent Authentication unavailable. Please enter the SMS code."
                                             } catch (fallbackError: Exception) {
-                                                uiState = VerifyUiState.Error(fallbackError.message ?: "Failed to start SMS fallback")
-                                                statusMessage = "Failed to send SMS: ${fallbackError.message}"
+                                                uiState = VerifyUiState.Error(
+                                                    fallbackError.message
+                                                        ?: "Failed to start SMS fallback"
+                                                )
+                                                statusMessage =
+                                                    "Failed to send SMS: ${fallbackError.message}"
                                             }
                                         }
 
                                     }
 
                                     "email_stepup" -> {
-                                        Log.d("MyApp", "SIM swap flagged — routing to email verification")
+                                        Log.d(
+                                            "DemoApp",
+                                            "SIM swap flagged —- routing to email verification"
+                                        )
                                         try {
                                             val emailStart = client.startEmailVerification(phone)
-                                            uiState = VerifyUiState.EnterEmailOtp(emailStart.requestId)
-                                            statusMessage = "⚠️ SIM swap detected. Falling back to email on file."
+                                            uiState =
+                                                VerifyUiState.EnterEmailOtp(emailStart.requestId)
+                                            statusMessage =
+                                                "⚠️ SIM swap detected. Falling back to email on file."
                                         } catch (e: Exception) {
-                                            uiState = VerifyUiState.Error(e.message ?: "Unknown error")
-                                            statusMessage = "Failed to start email verification: ${e.message}"
+                                            uiState =
+                                                VerifyUiState.Error(e.message ?: "Unknown error")
+                                            statusMessage =
+                                                "Failed to start email verification: ${e.message}"
                                         }
                                     }
 
@@ -179,6 +204,10 @@ fun VerificationScreen(client: VerifyApiClient) {
 
                             try {
                                 val result = client.submitCode(requestId, smsCode)
+                                Log.d(
+                                    "DemoApp",
+                                    "Attempting SMS verification with requestID: $requestId"
+                                )
                                 if (result.verified) {
                                     uiState = VerifyUiState.Verified("SMS")
                                     statusMessage = "Verified via SMS"
@@ -205,16 +234,20 @@ fun VerificationScreen(client: VerifyApiClient) {
                         scope.launch {
                             val requestId = (uiState as? VerifyUiState.EnterEmailOtp)?.requestId
                                 ?: return@launch
-                            Log.d("MyApp", "email request id: $requestId")
+                            Log.d("DemoApp", "email request id: $requestId")
 
                             uiState = VerifyUiState.Loading
                             statusMessage = ""
 
                             try {
                                 val result = client.submitCode(requestId, emailCode)
+                                Log.d(
+                                    "DemoApp",
+                                    "Attempting email verification with request id: $requestId"
+                                )
                                 if (result.verified) {
                                     uiState = VerifyUiState.Verified("Email")
-                                    statusMessage = "Verified via Email"
+                                    statusMessage = "Verified via email"
                                 } else {
                                     uiState = VerifyUiState.EnterEmailOtp(requestId)
                                     statusMessage = "Invalid code. Please try again."

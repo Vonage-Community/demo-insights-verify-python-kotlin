@@ -7,16 +7,14 @@ import androidx.activity.compose.setContent
 import com.vonage.clientlibrary.VGCellularRequestClient
 
 internal const val BACKEND_URL = BuildConfig.BACKEND_URL
-internal const val DEFAULT_PHONE = BuildConfig.PHONE_NUMBER
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        Log.d("MyApp", "App running with $BACKEND_URL")
+        Log.d("DemoApp", "App running with $BACKEND_URL")
         super.onCreate(savedInstanceState)
         VGCellularRequestClient.initializeSdk(this.applicationContext)
 
-        val client: VerifyApiClient =
-            RealVerifyApiClient
+        val client = VerifyApiClient
 
         setContent { VerifyApp(client = client) }
     }

@@ -37,13 +37,13 @@ private suspend fun post(url: String, body: Map<String, Any?>): JsonObject =
         gson.fromJson(responseBody, JsonObject::class.java)
     }
 
-object RealVerifyApiClient : VerifyApiClient {
-    override suspend fun startVerification(phone: String): StartVerificationResponse {
+object VerifyApiClient {
+    suspend fun startVerification(phone: String): StartVerificationResponse {
         val json = post("$BACKEND_URL/verification", mapOf("phone" to phone))
-        Log.d("MyApp", "startVerification response: $json")
+        Log.d("DemoApp", "startVerification response: $json")
 
         val channel = json.getString("channel") ?: "sms_otp"
-        Log.d("MyApp", "channel: $channel")
+        Log.d("DemoApp", "channel: $channel")
 
         val checkUrl = json.getString("check_url")
 
@@ -56,7 +56,7 @@ object RealVerifyApiClient : VerifyApiClient {
         return StartVerificationResponse(requestId, checkUrl, channel)
     }
 
-    override suspend fun checkSilentAuth(url: String): String = withContext(Dispatchers.IO) {
+    suspend fun checkSilentAuth(url: String): String = withContext(Dispatchers.IO) {
         val params = VGCellularRequestParameters(
             url = url,
             headers = mapOf(),
@@ -64,7 +64,7 @@ object RealVerifyApiClient : VerifyApiClient {
             maxRedirectCount = 10
         )
 
-        Log.d("MyApp", "Checking silent auth")
+        Log.d("DemoApp", "Attempting Silent Authentication ...")
 
         val response = VGCellularRequestClient.getInstance()
             .startCellularGetRequest(params, false)
@@ -85,27 +85,28 @@ object RealVerifyApiClient : VerifyApiClient {
         code
     }
 
-    override suspend fun startEmailVerification(phone: String): StartEmailVerificationResponse {
+    suspend fun startEmailVerification(phone: String): StartEmailVerificationResponse {
         val json = post("$BACKEND_URL/send-email-otp", mapOf("phone" to phone))
+        Log.d("DemoApp", "startEmailVerification response: $json")
         val requestId = json.getString("request_id") ?: throw IOException("Missing request_id")
         return StartEmailVerificationResponse(requestId)
     }
 
-    override suspend fun startSmsFallback(phone: String): StartVerificationResponse {
+    suspend fun startSmsFallback(phone: String): StartVerificationResponse {
         val json = post("$BACKEND_URL/fallback-sms", mapOf("phone" to phone))
+        Log.d("DemoApp", "SmsFallback response: $json")
         val requestId = json.getString("request_id") ?: throw IOException("Missing request_id")
         return StartVerificationResponse(requestId, null, "sms_otp")
     }
 
-    override suspend fun submitCode(requestId: String?, code: String): CheckCodeResponse {
+    suspend fun submitCode(requestId: String?, code: String): CheckCodeResponse {
         val json = post("$BACKEND_URL/check-code", mapOf("request_id" to requestId, "code" to code))
-        Log.d("MyApp", "submitCode response: $json")
+        Log.d("DemoApp", "submitCode response: $json")
         return CheckCodeResponse(
             verified = json.get("verified")?.asBoolean ?: false,
             status = json.getString("status")
         )
     }
-
 
 
 }
