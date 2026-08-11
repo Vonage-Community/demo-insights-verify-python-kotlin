@@ -123,7 +123,7 @@ You will need these secrets to configure your environment variables.
 
 The Playground allows you to start using the Network Features without approval of a business profile by the operators. In order to use your real number with this demo app, you will need to [configure the Playground for your Vonage application](https://vonage.dev/4fQ4V3Q).
 
-You can also use Vonage Virtual Operator to[test certain workflows](#testing-different-scenarios-with-vonage-virtual-operator).
+You can also use Vonage Virtual Operator to [test certain workflows](#testing-different-scenarios-with-vonage-virtual-operator).
 
 ## Running the Server
 
