@@ -16,6 +16,8 @@ import java.io.IOException
 private val httpClient = OkHttpClient()
 private val gson = Gson()
 
+class SilentAuthUnavailableException(message: String) : Exception(message)
+
 // Helper to avoid repeating boilerplate on every request
 private fun JsonObject.getString(key: String): String? =
     get(key)?.takeIf { !it.isJsonNull }?.asString
@@ -34,6 +36,7 @@ private suspend fun post(url: String, body: Map<String, Any?>): JsonObject =
         val responseBody = response.body?.string() ?: throw IOException("Empty response body")
         gson.fromJson(responseBody, JsonObject::class.java)
     }
+
 object RealVerifyApiClient : VerifyApiClient {
     override suspend fun startVerification(phone: String): StartVerificationResponse {
         val json = post("$BACKEND_URL/verification", mapOf("phone" to phone))
@@ -53,7 +56,6 @@ object RealVerifyApiClient : VerifyApiClient {
         return StartVerificationResponse(requestId, checkUrl, channel)
     }
 
-
     override suspend fun checkSilentAuth(url: String): String = withContext(Dispatchers.IO) {
         val params = VGCellularRequestParameters(
             url = url,
@@ -62,22 +64,23 @@ object RealVerifyApiClient : VerifyApiClient {
             maxRedirectCount = 10
         )
 
-        Log.d("MyApp", "checking silent auth")
+        Log.d("MyApp", "Checking silent auth")
 
         val response = VGCellularRequestClient.getInstance()
             .startCellularGetRequest(params, false)
 
-        val httpStatus = response.optInt("http_status", -1)
         val sdkError = response.optString("error", "")
+        if (sdkError.isNotEmpty()) {
+            throw SilentAuthUnavailableException("SDK error: $sdkError")
+        }
 
-        if (sdkError.isNotEmpty()) throw IOException("Silent Auth SDK error: $sdkError")
+        val httpStatus = response.optInt("http_status", -1)
         if (httpStatus !in 200..299) {
-            val rawBody = response.optString("response_raw_body", "")
-            throw IOException("Silent Auth failed: HTTP $httpStatus - ${rawBody.take(200)}")
+            throw SilentAuthUnavailableException("HTTP $httpStatus")
         }
 
         val code = response.optJSONObject("response_body")?.optString("code", null)
-        if (code.isNullOrBlank()) throw IOException("Silent Auth response missing 'code'")
+        if (code.isNullOrBlank()) throw SilentAuthUnavailableException("Silent auth response missing 'code'")
 
         code
     }
@@ -88,6 +91,12 @@ object RealVerifyApiClient : VerifyApiClient {
         return StartEmailVerificationResponse(requestId)
     }
 
+    override suspend fun startSmsFallback(phone: String): StartVerificationResponse {
+        val json = post("$BACKEND_URL/fallback-sms", mapOf("phone" to phone))
+        val requestId = json.getString("request_id") ?: throw IOException("Missing request_id")
+        return StartVerificationResponse(requestId, null, "sms_otp")
+    }
+
     override suspend fun submitCode(requestId: String?, code: String): CheckCodeResponse {
         val json = post("$BACKEND_URL/check-code", mapOf("request_id" to requestId, "code" to code))
         Log.d("MyApp", "submitCode response: $json")
@@ -96,4 +105,7 @@ object RealVerifyApiClient : VerifyApiClient {
             status = json.getString("status")
         )
     }
+
+
+
 }

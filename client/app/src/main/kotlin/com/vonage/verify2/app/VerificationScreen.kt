@@ -4,7 +4,12 @@ import android.util.Log
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -25,7 +30,7 @@ fun VerificationScreen(client: VerifyApiClient) {
     var phone by remember { mutableStateOf(DEFAULT_PHONE) }
     var smsCode by remember { mutableStateOf("") }
     var emailCode by remember { mutableStateOf("") }
-    var uiState by remember { mutableStateOf<VerifyUiState>(VerifyUiState.EnterPhone) }
+    var uiState: VerifyUiState by remember { mutableStateOf(VerifyUiState.EnterPhone) }
     var statusMessage by remember { mutableStateOf("") }
 
     val scope = rememberCoroutineScope()
@@ -118,11 +123,18 @@ fun VerificationScreen(client: VerifyApiClient) {
                                                 uiState = VerifyUiState.EnterSms(requestId)
                                                 statusMessage = "Silent auth didn't complete. Please enter SMS code."
                                             }
-                                        } catch (e: Exception) {
-                                            Log.d("MyApp", "SA failed: ${e.message}")
-                                            uiState = VerifyUiState.EnterSms(requestId)
-                                            statusMessage = "Silent Auth failed. Please enter the SMS code."
+                                        } catch (e: SilentAuthUnavailableException) {
+                                            Log.d("MyApp", "Silent auth unavailable: ${e.message}, falling back to SMS")
+                                            try {
+                                                val fallback = client.startSmsFallback(phone)
+                                                uiState = VerifyUiState.EnterSms(fallback.requestId)
+                                                statusMessage = "Silent auth unavailable. Please enter the SMS code."
+                                            } catch (fallbackError: Exception) {
+                                                uiState = VerifyUiState.Error(fallbackError.message ?: "Failed to start SMS fallback")
+                                                statusMessage = "Failed to send SMS: ${fallbackError.message}"
+                                            }
                                         }
+
                                     }
 
                                     "email_stepup" -> {
@@ -242,4 +254,5 @@ fun VerificationScreen(client: VerifyApiClient) {
             Text(statusMessage)
         }
     }
+
 }

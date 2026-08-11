@@ -21,15 +21,12 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-
 class VerificationRequest(BaseModel):
     phone: str = Field(..., description="Phone number to verify")
-
 
 class CheckCodeRequest(BaseModel):
     request_id: str
     code: str
-
 
 @app.post("/verification")
 async def start_verification(req: VerificationRequest):
@@ -44,16 +41,21 @@ async def start_verification(req: VerificationRequest):
             logger.info("SIM swap flagged, stepping up to email")
             return {"channel": "email_stepup", "request_id": None}
 
-        try:
-            return start_silent_auth(phone)
-        except HttpRequestError as e:
-            if e.response and e.response.status_code == 412:
-                return start_sms(phone)
-            raise
+        return start_silent_auth(phone)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/fallback-sms")
+async def fallback_sms(req: VerificationRequest):
+    # NOTE: overrides to real number for demo/testing purposes
+    # phone = req.phone
+    phone = os.environ["USER_PHONE_NUMBER"]
+    logger.info(f"SMS fallback requested, sending to: {phone}")
+    try:
+        return start_sms(phone)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/send-email-otp")
 async def send_email_otp(req: VerificationRequest):
@@ -73,7 +75,6 @@ async def send_email_otp(req: VerificationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/check-code")
 async def verify_code(req: CheckCodeRequest):
     request_id = req.request_id
@@ -87,9 +88,9 @@ async def verify_code(req: CheckCodeRequest):
         logger.info("Verification failure")
         return {"verified": False, "status": str(e)}
 
-
 if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("PORT", 4000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+

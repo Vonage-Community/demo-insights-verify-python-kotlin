@@ -67,6 +67,7 @@ def start_sms(phone: str) -> dict:
     Starts SMS OTP verification.
     Returns channel and request_id.
     """
+    logger.info(f"Starting SMS fallback with: {phone}")
     request = VerifyRequest(
         brand="DemoApp",
         workflow=[SmsChannel(to=phone)],

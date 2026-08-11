@@ -11,15 +11,12 @@ internal const val DEFAULT_PHONE = BuildConfig.PHONE_NUMBER
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        Log.d("MyApp", "App running with $BACKEND_URL with USE_MOCK_CLIENT AS: ${BuildConfig.USE_MOCK_CLIENT}")
+        Log.d("MyApp", "App running with $BACKEND_URL")
         super.onCreate(savedInstanceState)
         VGCellularRequestClient.initializeSdk(this.applicationContext)
 
-        val client: VerifyApiClient = if (BuildConfig.USE_MOCK_CLIENT) {
-            MockVerifyApiClient(channel = "sms_otp", verified = true)
-        } else {
+        val client: VerifyApiClient =
             RealVerifyApiClient
-        }
 
         setContent { VerifyApp(client = client) }
     }
